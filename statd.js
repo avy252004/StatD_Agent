@@ -11,7 +11,8 @@ let counters = {};
 let keycouters = {};
 let timers = {};
 let timer_counters = {};
-let server_loaded ;
+let servers_loaded ;
+let pctThreshold = null;
 let backendEvents = new events.eventemitter();
 let keyNameSanitize = true;
 let startup_time = Math.round(new Date().getTime() / 1000);
@@ -25,6 +26,23 @@ let stats = {
     }
 
 };
+
+//start the server function
+function start_server(server , server_cnf, callbackfn){
+    const s = require('server_cnf');
+
+    if (config.debug) {
+        l.log("Loading server: " + name, 'DEBUG');
+    }
+    server_loaded = s.start(server , callbackfn);
+    if(!server_loaded){
+        l.log("Failed to load server: " + name, "ERROR");
+        process.exit(1);
+    }
+
+
+}
+
 
 config.configfile(process.argv[2],function(configur){
     conf = configur;
@@ -43,7 +61,7 @@ config.configfile(process.argv[2],function(configur){
     if(configur.keyNameSanitize !== undefined){
         keyNameSanitize = configur.keyNameSanitize;
     }
-    if(!server_loaded){
+    if(!servers_loaded){
         const keyFlushInterval = Number((config.keyFlush && config.keyFlush.interval) || 0);
         const handlePacket = function(mssg , rinfo){
             counters[packets_recived]++;
@@ -76,12 +94,7 @@ config.configfile(process.argv[2],function(configur){
                 }
                 key = sanitizeKeyName(key);
                 
-                if (keyFlushInterval > 0) {
-                    if (! keyCounter[key]) {
-                        keyCounter[key] = 0;
-                    }
-                    keyCounter[key] += 1;
-                }
+                
                 if(keyFlushInterval>0){
                     if(!keycouters[key]){
                         keyCounter[key] = 0 ;
@@ -141,5 +154,62 @@ config.configfile(process.argv[2],function(configur){
             stats.messages.last_msg_seen = Math.round(new Date().getTime() / 1000);
         };
 
+
+        server_config = configur.servers || [configure];
+        for(i in server_config){
+            server = server.server[i] || "./servers/udp";
+            start_server(server,server_config[i],handlePacket);
+        }
+
+        
+        servers_loaded = true;
+        pctThreshold = configur.percentThreshold || 90;
+        if (!Array.isArray(pctThreshold)) {
+            pctThreshold = [ pctThreshold ]; // listify percentiles so single values work the same
+        }
+
+        FlushInterval = configur.FlushInterval || 10000;
+        configur.FlushInterval = FlushInterval;
+        if (configur.backends) {
+            for (let j = 0; j < configur.backends.length; j++) {
+                loadBackend(configur, configur.backends[j]);
+            }
+        } else {
+      
+        loadBackend(config,'./backends/console');
+        }
+
+        flushint = setInterval(flushMetrices, FlushInterval);
+
+        if(keyFlushInterval>0){
+            keyFlushPercent = number((configur.keyFlush && configur.keyFlush.keyFlushPercent))/100
+            keyFlushlog = (config.keyFlush && config.keyFlush.log);
+
+            keyflushint = setInterval(function(){
+                sortedKeys = [];
+                for(key in keycouters){
+                    sortedKeys.push(key, keycouters[key]);
+
+                }
+                sortedKeys.sort(function(a,b){return b[1]-a[1];});
+                logMessage = "";
+                timestring = (new Date()) + ""
+                for( i = 0 , e = sortedKeys.length() * keyFlushPercent /100 ; i<e; i++) {
+                    logMessage += timeString + " count=" + sortedKeys[i][1] + " key=" + sortedKeys[i][0] + "\n";
+                }
+
+                if (keyFlushLog) {
+                    const logFile = fs.createWriteStream(keyFlushLog, {flags: 'a+'});
+                    logFile.write(logMessage);
+                    logFile.end();
+                } else {
+                    process.stdout.write(logMessage);
+                }   
+            } , keyFlushInterval)
+
+        }
+
+        
+        
     }
 });
