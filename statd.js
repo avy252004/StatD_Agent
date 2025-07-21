@@ -6,6 +6,7 @@ const logger = require('./lib/logger');
 const events  = require('events');
 const { argv } = require('process');
 const { count } = require('console');
+const pm = require('./lib/process_metrices')
 
 let counters = {};
 let keycouters = {};
@@ -16,6 +17,9 @@ let pctThreshold = null;
 let backendEvents = new events.eventemitter();
 let keyNameSanitize = true;
 let startup_time = Math.round(new Date().getTime() / 1000);
+let set = {};
+let counter_rates = {};
+let time_lag;
 
 let  l ;
 let  conf;
@@ -32,15 +36,113 @@ function start_server(server , server_cnf, callbackfn){
     const s = require('server_cnf');
 
     if (config.debug) {
-        l.log("Loading server: " + name, 'DEBUG');
+        l.log("Loading server: " + server_cnf, 'DEBUG');
     }
     server_loaded = s.start(server , callbackfn);
     if(!server_loaded){
-        l.log("Failed to load server: " + name, "ERROR");
+        l.log("Failed to load server: " + server_cnf +  "ERROR");
         process.exit(1);
     }
 
 
+}
+
+//startt eh backed srver by default console for flushin the metrices
+function backendServer(backend_config,name){
+    const backendmod = require('name');
+    if(backend_config.debug){
+        l.log("loading the backend srver:" + name , "DEBUG" );
+
+    }
+
+    ret = backendmod.start(startup_time , backend_config, backendEvents , l);
+    if(!ret){
+        l.log("faild to start" + name , "ERROR" );
+    }
+    
+}
+
+function flushMetrices(){
+    let matric_hash={
+        counters : counters,
+        timers : timers,
+        timer_counters : timer_counters,
+        gauges : gauges,
+        pctThreshold: pctThreshold,
+        histogram : conf.histogram,
+        sets : set,
+        counter_rates : counter_rates
+    };
+    let time_stamp = Math.round(new Date().getTime() / 1000);
+    if(old_time_Stamp>0){
+        gauges[time_lag] = (time_stamp - old_time_Stamp - (number(conf.FlushInterval /1000)));
+    }
+    backendEvents.on('flush',function(time_stamp,matrices){
+        console.log(`Clearing metrics at ${new Date(time_stamp).toISOString()}`);
+
+        // clear counter
+        let deletecounters = conf.deletecounters || false;
+        if(deletecounters){
+            for(key in matrices.counters){
+                if(key.indexOf("badlines_recieved")!= 0 || key.indexOf("matrices_recieved")!= -1|| key.indexOf("packet_recieved")!=-1){
+                    matrices.counter[keys] = 0;
+                }else{
+                    delete(matrices.counter[key]);
+                }
+            }
+
+        }else{
+            for(key in counters){
+                matrices.counters[key] = 0;
+            }
+        }
+
+        //cleart timer and timer_counter;
+        let deletetimer = conf.deletetimer || false;
+        for(keys in matrices.timers){
+            if(deletetimer){
+               delete(matrices.timers[key]);
+               delete(matrices.timer_counters[key]);
+            }
+            else{
+                matrices.timers[key] = [];
+                matrices.timer_counters[key] = 0;
+            }
+        }
+
+        //delete gauges
+        let deleteGauges = conf.deleteGauges;
+        if(deleteGauges){
+            for(key in matrices.gauges){
+                matrices.gaugesTTL[key]--;
+                if(gaugesTTL[key]<1){
+                    delete matrices.gauges[key];
+                    delete matrices.gaugesTTL[key];
+                }
+            }
+        }
+
+        //delete the sets
+        conf.deleteSets = conf.deleteSets || false;
+        for (const set_key in metrics.sets) {
+            if (conf.deleteSets) {
+                delete(metrics.sets[set_key]);
+            } else {
+                metrics.sets[set_key] = new set.Set();
+            }
+        }
+    })
+
+}
+
+
+function getflusinterval(interval)
+{
+    const now = new Date.getTime();
+    const delta = now - startup_time*1000;
+    const timeoutattempt = Math.round(delta/interval)+1;
+    const finaltimeinterval = (startup_time *1000 + timeoutattempt*interval) - now;
+    return finaltimeinterval;
 }
 
 
@@ -52,7 +154,7 @@ config.configfile(process.argv[2],function(configur){
     let prefix = conf.prefixstatsD ?? "statD";
 
     let bad_lines = prefix + "badlines_recieved";
-    let matrices_recieved= prefix + "matrices_recieved";
+    let metrices_recieved= prefix + "matrices_recieved";
     let packets_recived = prefix + "packet_recieved";
     counters[bad_lines] = 0 ;
     counters[metrices_recieved] = 0 ;
@@ -163,6 +265,10 @@ config.configfile(process.argv[2],function(configur){
 
         
         servers_loaded = true;
+
+        backendServer(configur,"./backend/console");
+
+
         pctThreshold = configur.percentThreshold || 90;
         if (!Array.isArray(pctThreshold)) {
             pctThreshold = [ pctThreshold ]; // listify percentiles so single values work the same
@@ -170,16 +276,16 @@ config.configfile(process.argv[2],function(configur){
 
         FlushInterval = configur.FlushInterval || 10000;
         configur.FlushInterval = FlushInterval;
-        if (configur.backends) {
-            for (let j = 0; j < configur.backends.length; j++) {
-                loadBackend(configur, configur.backends[j]);
-            }
-        } else {
+        // if (configur.backends) {
+        //     for (let j = 0; j < configur.backends.length; j++) {
+        //         loadBackend(configur, configur.backends[j]);
+        //     }
+        // } else {
       
-        loadBackend(config,'./backends/console');
-        }
+        // loadBackend(config,'./backends/console');
+        // }
 
-        flushint = setInterval(flushMetrices, FlushInterval);
+        flushint = setTimeout(flushMetrices, getflusinterval(FlushInterval));
 
         if(keyFlushInterval>0){
             keyFlushPercent = number((configur.keyFlush && configur.keyFlush.keyFlushPercent))/100
@@ -204,7 +310,9 @@ config.configfile(process.argv[2],function(configur){
                     logFile.end();
                 } else {
                     process.stdout.write(logMessage);
-                }   
+                } 
+                
+                keycouters = {};
             } , keyFlushInterval)
 
         }
